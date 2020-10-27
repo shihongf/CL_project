@@ -1,2 +1,5 @@
 checkpoint
 data
+run_jupyter.sbatch
+*.out
+result
