@@ -241,11 +241,6 @@ def life_experience(model, continuum, x_te, args):
 
     time_end = time.time()
     time_spent = time_end - time_start
-    print(time_spent)
-    print(torch.Tensor(result_t))
-    print(torch.Tensor(result_a))
-    print("aaaa")
-    print("aaa")
     return torch.Tensor(result_t), torch.Tensor(result_a), time_spent
 
 
