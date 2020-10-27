@@ -3,4 +3,4 @@ data
 run_jupyter.sbatch
 *.out
 results
-.ipynb_checkpoints/*
+.ipynb_checkpoints
