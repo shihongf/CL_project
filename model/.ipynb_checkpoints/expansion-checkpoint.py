@@ -548,6 +548,8 @@ class Net(nn.Module):
                     cos_weight_temp = cos_weight_temp.cuda()
                 cur_grad = self.grads_layer[layer_num][:, t]
                 cur_weight_norm = torch.mul(cur_grad, cur_grad)
+                if self.gpu:
+                    weights_norm_temp = weights_norm_temp.cuda()
                 weights_norm_temp += cur_weight_norm
                 for pre_task in indx:
                     pre_grad = self.grads_layer[layer_num][:, pre_task]

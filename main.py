@@ -20,8 +20,10 @@ import os
 import numpy as np
 
 import torch
+import tqdm
+
 from torch.autograd import Variable
-from metrics.metrics import confusion_matrix
+from metrics.metrics import confusion_matrix, get_n_params
 
 
 # continuum iterator #########################################################
@@ -155,6 +157,8 @@ def eval_tasks(model, tasks, args):
 def life_experience(model, continuum, x_te, args):
     result_a = []  # accuracy
     result_t = []  # number of task
+    training_times = [] # training time for each task
+    model_capacities = [] # model capacity
     task_l = []
     cos_layer = []
     cos_weight = []
@@ -168,80 +172,85 @@ def life_experience(model, continuum, x_te, args):
     time_start = time.time()
     train_start = time_start
 
-    for (i, (x, t, y)) in enumerate(continuum):
-        if t != current_task:
-            if args.cuda:
-                torch.cuda.empty_cache()
-            print("Training done")
-            print("Training time: ", time.time() - train_start)
-            temp_acc = eval_tasks(model, x_te, args)[:temp_total_task+1]
-            for pre_t in range(t):
-                print("accuracy of task " + str(pre_t) + " is: " + str(temp_acc[pre_t].item()))
-            if t > temp_total_task:  # hot fix
-                break
+    with tqdm.tqdm(total=args.n_epochs*args.samples_per_task*(args.task_num+1)) as pbar:
+        for (i, (x, t, y)) in enumerate(continuum):
+            if i%100==0:
+                pbar.update(100*args.batch_size)
+            if t != current_task:
+                if args.cuda:
+                    torch.cuda.empty_cache()
+                model_capacity = get_n_params(model)
+                training_time = time.time() - train_start
+                train_start = time.time()
+                print("capacity: ", model_capacity)
+                print("Training done")
+                print("Training time: ", training_time)
+                model_capacities.append(model_capacity)
+                training_times.append(training_time)
+                temp_acc = eval_tasks(model, x_te, args)[:temp_total_task+1]
+                for pre_t in range(t):
+                    print("accuracy of task " + str(pre_t) + " is: " + str(temp_acc[pre_t].item()))
+                if t > temp_total_task:  # hot fix
+                    break
 
-            result_a.append(temp_acc)
-            result_t.append(current_task)
-            task_l = []
-            cos_weight = []
-            cos_layer = []
-            weight_norm = []
-            current_task = t
-            observe = 1
+                result_a.append(temp_acc)
+                result_t.append(current_task)
+                task_l = []
+                cos_weight = []
+                cos_layer = []
+                weight_norm = []
+                current_task = t
+                observe = 1
 
-            print("\nTask " + str(t))
-            print("Start observing...")
+                print("\nTask " + str(t))
+                print("Start observing...")
 
-        if (i % args.log_every) == 0:
-            result_a.append(eval_tasks(model, x_te, args)[:temp_total_task+1])
-            result_t.append(current_task)
+            if (i % args.log_every) == 0:
+                result_a.append(eval_tasks(model, x_te, args)[:temp_total_task+1])
+                result_t.append(current_task)
 
-        if 'expansion' in args.model \
-                and (i == batch_per_task * t + observe_batch) and t > 0:
-            print("Observation done")
-            print("Start expanding...")
-            cos_layer = torch.tensor(cos_layer)
-            if args.cuda:
-                cos_layer = cos_layer.cuda()
-            model.expand(cos_layer, cos_weight, weight_norm, t)
-            print("Expanding done")
-            train_start = time.time()
-            print("Start training...")
-            observe = 0
-            if args.cuda:
-                try:
+            if 'expansion' in args.model \
+                    and (i == batch_per_task * t + observe_batch) and t > 0:
+                print("Observation done")
+                print("Start expanding...")
+                cos_layer = torch.tensor(cos_layer)
+                if args.cuda:
+                    cos_layer = cos_layer.cuda()
+                model.expand(cos_layer, cos_weight, weight_norm, t)
+                print("Expanding done")
+                #train_start = time.time()
+                print("Start training...")
+                observe = 0
+                if args.cuda:
                     model.cuda()
-                except:
-                    pass
+            v_x = x.view(x.size(0), -1)
+            v_y = y.long()
 
-        v_x = x.view(x.size(0), -1)
-        v_y = y.long()
-
-        if args.cuda:
-            v_x = v_x.cuda()
-            v_y = v_y.cuda()
-
-        if 'expansion' in args.model and observe and t > 0:
-            model.train()
-            temp_cos_layer, temp_cos_weight, temp_weight_norm = \
-                model.observe(Variable(v_x), t, Variable(v_y))
-            cos_layer.append(temp_cos_layer)
-            if cos_weight == []:
-                cos_weight = temp_cos_weight
-                weight_norm = temp_weight_norm
+            if args.cuda:
+                v_x = v_x.cuda()
+                v_y = v_y.cuda()
+                    
+            if 'expansion' in args.model and observe and t > 0:
+                model.train()
+                temp_cos_layer, temp_cos_weight, temp_weight_norm = \
+                    model.observe(Variable(v_x), t, Variable(v_y))
+                cos_layer.append(temp_cos_layer)
+                if cos_weight == []:
+                    cos_weight = temp_cos_weight
+                    weight_norm = temp_weight_norm
+                else:
+                    cos_weight = add_list(cos_weight, temp_cos_weight)
+                    weight_norm = add_list(weight_norm, temp_weight_norm)
             else:
-                cos_weight = add_list(cos_weight, temp_cos_weight)
-                weight_norm = add_list(weight_norm, temp_weight_norm)
-        else:
-            model.train()
-            task_l.append(model.update(Variable(v_x), t, Variable(v_y)))
+                model.train()
+                task_l.append(model.update(Variable(v_x), t, Variable(v_y)))
 
     result_a.append(eval_tasks(model, x_te, args)[:temp_total_task+1])
     result_t.append(current_task)
 
     time_end = time.time()
     time_spent = time_end - time_start
-    return torch.Tensor(result_t), torch.Tensor(result_a), time_spent
+    return torch.Tensor(result_t), torch.Tensor(result_a), torch.Tensor(model_capacities), torch.Tensor(training_times), time_spent
 
 
 if __name__ == "__main__":
@@ -343,7 +352,7 @@ if __name__ == "__main__":
             pass
 
     # run model on continuum
-    result_t, result_a, spent_time = life_experience(
+    result_t, result_a, model_capacities, training_times, spent_time = life_experience(
         model, continuum, x_te, args)
 
     # prepare saving path and file name
@@ -356,10 +365,10 @@ if __name__ == "__main__":
     fname = os.path.join(args.save_path, fname)
 
     # save confusion matrix and print one line of stats
-    stats = confusion_matrix(result_t, result_a, fname + '.txt')
+    stats = confusion_matrix(result_t, result_a, model_capacities, training_times, fname + '.txt')
     one_liner = str(vars(args)) + ' # '
     one_liner += ' '.join(["%.3f" % stat for stat in stats])
     print(fname + ': ' + one_liner + ' # ' + str(spent_time))
 
     # save all results in binary file
-    torch.save((result_t, result_a, stats, one_liner, args), fname + '.pt')
+    torch.save((result_t, result_a, model_capacities, training_times, stats, one_liner, args), fname + '.pt')
